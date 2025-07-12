@@ -30,6 +30,11 @@ class SailhouseClient(
     private val config: SailhouseClientConfig = SailhouseClientConfig()
 ) : CoroutineScope {
     override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.IO
+    
+    /**
+     * Admin client for managing Sailhouse resources.
+     */
+    val admin: AdminClient
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -52,6 +57,10 @@ class SailhouseClient(
             connectTimeoutMillis = config.timeout
             socketTimeoutMillis = config.timeout
         }
+    }
+
+    init {
+        admin = AdminClient(httpClient, config.baseUrl)
     }
 
     /**
@@ -79,6 +88,9 @@ class SailhouseClient(
                 }
                 options?.sendAt?.let { sendAt ->
                     put("send_at", sendAt.toString())
+                }
+                options?.waitGroupInstanceId?.let { waitGroupInstanceId ->
+                    put("wait_group_instance_id", waitGroupInstanceId)
                 }
             }
 
@@ -182,6 +194,32 @@ class SailhouseClient(
     }
 
     /**
+     * Pulls a single event from a subscription.
+     *
+     * @param topic The topic to pull from.
+     * @param subscription The subscription to pull from.
+     * @return The event, or null if no events are available.
+     */
+    suspend inline fun <reified T> pull(
+        topic: String,
+        subscription: String
+    ): Event<T>? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val response = httpClient.get("${config.baseUrl}/topics/$topic/subscriptions/$subscription/events/pull")
+                if (response.status.isSuccess()) {
+                    val eventDto = response.body<EventDto<T>>()
+                    Event.fromDto(eventDto, topic, subscription, this@SailhouseClient)
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    /**
      * Acknowledges an event.
      *
      * @param topic The topic the event belongs to.
@@ -195,6 +233,47 @@ class SailhouseClient(
     ) {
         withContext(Dispatchers.IO) {
             httpClient.post("${config.baseUrl}/topics/$topic/subscriptions/$subscription/events/$eventId")
+        }
+    }
+
+    /**
+     * Creates a wait group for coordinated publishing of multiple events.
+     *
+     * @param topic The topic for the wait group.
+     * @param events The events to publish as part of the wait group.
+     * @param options The options for the wait group.
+     */
+    suspend fun <T> wait(
+        topic: String,
+        events: List<WaitGroupEvent<T>>,
+        options: WaitOptions? = null
+    ) {
+        withContext(Dispatchers.IO) {
+            // Create wait group instance
+            val waitGroupResponse = httpClient.post("${config.baseUrl}/waitgroups/instances") {
+                setBody(buildJsonObject {
+                    put("topic", topic)
+                    options?.ttl?.let { put("ttl", it) }
+                })
+            }.body<WaitGroupInstanceResponse>()
+
+            // Publish all events with the wait group instance ID
+            events.forEach { event ->
+                publish(
+                    event.topic,
+                    event.body,
+                    PublishEventOptions(
+                        metadata = event.metadata,
+                        sendAt = event.sendAt,
+                        waitGroupInstanceId = waitGroupResponse.waitGroupInstanceId
+                    )
+                )
+            }
+
+            // Mark wait group as in progress
+            httpClient.put("${config.baseUrl}/waitgroups/instances/${waitGroupResponse.waitGroupInstanceId}/events") {
+                setBody(buildJsonObject {})
+            }
         }
     }
 

@@ -3,6 +3,7 @@ package dev.sailhouse
 import dev.sailhouse.models.EventDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Represents an event in the Sailhouse system.
@@ -11,6 +12,7 @@ import kotlinx.coroutines.withContext
  * @param data The data payload of the event.
  * @param queryableValue The value that can be queried.
  * @param timestamp The timestamp when the event was created.
+ * @param metadata Additional metadata associated with the event.
  * @param topic The topic the event belongs to.
  * @param subscription The subscription the event was retrieved from.
  * @param client The Sailhouse client instance.
@@ -20,6 +22,7 @@ class Event<T>(
     val data: T,
     val queryableValue: String,
     val timestamp: String,
+    val metadata: Map<String, JsonElement>? = null,
     private val topic: String,
     private val subscription: String,
     private val client: SailhouseClient
@@ -54,6 +57,7 @@ class Event<T>(
                 data = dto.data,
                 queryableValue = dto.queryableValue,
                 timestamp = dto.timestamp,
+                metadata = dto.metadata,
                 topic = topic,
                 subscription = subscription,
                 client = client
